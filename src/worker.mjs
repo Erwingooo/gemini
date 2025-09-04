@@ -139,8 +139,55 @@ async function handleEmbeddings (req, apiKey) {
   return new Response(body, fixCors(response));
 }
 
+// 格式检测函数：区分OpenAI格式和原生Gemini格式
+const isNativeGeminiFormat = (req) => {
+  // 原生Gemini格式特征：有contents字段且没有messages字段
+  return req.contents && !req.messages;
+};
+
+// 原生Gemini API直通处理函数
+async function handleNativeGemini (req, apiKey) {
+  // 提取模型名称
+  let model = DEFAULT_MODEL;
+  if (req.model) {
+    if (req.model.startsWith("models/")) {
+      model = req.model.substring(7);
+    } else if (req.model.startsWith("gemini-") || req.model.startsWith("gemma-") || req.model.startsWith("learnlm-")) {
+      model = req.model;
+    }
+  }
+  
+  // 构建请求体（直接使用原生格式，无需转换）
+  const body = {
+    contents: req.contents,
+    generationConfig: req.generationConfig || {},
+    safetySettings: req.safetySettings || safetySettings,
+    ...(req.tools && { tools: req.tools }),
+    ...(req.tool_config && { tool_config: req.tool_config })
+  };
+  
+  const TASK = req.stream ? "streamGenerateContent" : "generateContent";
+  let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
+  if (req.stream) { url += "?alt=sse"; }
+  
+  const response = await fetch(url, {
+    method: "POST",
+    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  
+  // 直接返回原生Gemini响应，无需格式转换
+  return new Response(response.body, fixCors(response));
+}
+
 const DEFAULT_MODEL = "gemini-2.5-flash";
 async function handleCompletions (req, apiKey) {
+  // 检测请求格式并选择处理方式
+  if (isNativeGeminiFormat(req)) {
+    return handleNativeGemini(req, apiKey);
+  }
+  
+  // 以下是原有的OpenAI格式处理逻辑
   let model = DEFAULT_MODEL;
   switch (true) {
     case typeof req.model !== "string":
